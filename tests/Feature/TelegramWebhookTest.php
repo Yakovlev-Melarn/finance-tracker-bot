@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\Bot\BotMessenger;
 use App\TransactionType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Telegram\Bot\Exceptions\TelegramSDKException;
 use Tests\TestCase;
 
 class TelegramWebhookTest extends TestCase
@@ -198,5 +199,34 @@ class TelegramWebhookTest extends TestCase
 
         $response->assertOk();
         $this->assertDatabaseCount('transactions', 0);
+    }
+
+    public function test_reply_failure_returns_500_to_trigger_redelivery(): void
+    {
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->andThrow(new TelegramSDKException('cURL error 35: TLS connect error'));
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2006,
+            'message' => [
+                'message_id' => 6,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/start',
+            ],
+        ]);
+
+        $response->assertStatus(500);
+        $response->assertJson(['ok' => false]);
+        $this->assertDatabaseHas('users', ['telegram_id' => 42]);
     }
 }

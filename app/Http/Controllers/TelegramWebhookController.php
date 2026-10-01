@@ -16,8 +16,6 @@ class TelegramWebhookController extends Controller
 
     /**
      * Handle an incoming Telegram update.
-     *
-     * @throws TelegramSDKException
      */
     public function handle(Request $request): JsonResponse
     {
@@ -28,7 +26,16 @@ class TelegramWebhookController extends Controller
             'type' => $this->updateType($update),
         ]);
 
-        $this->router->handle($update);
+        try {
+            $this->router->handle($update);
+        } catch (TelegramSDKException $exception) {
+            Log::channel('single')->error('Telegram reply failed, asking for redelivery', [
+                'update_id' => $update['update_id'] ?? null,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['ok' => false], 500);
+        }
 
         return response()->json(['ok' => true]);
     }
