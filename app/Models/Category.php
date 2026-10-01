@@ -2,17 +2,18 @@
 
 namespace App\Models;
 
-use App\Currency;
-use Database\Factories\UserFactory;
+use App\TransactionType;
+use Database\Factories\CategoryFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['telegram_id', 'name', 'currency'])]
-class User extends Model
+#[Fillable(['user_id', 'name', 'keywords', 'type'])]
+class Category extends Model
 {
-    /** @use HasFactory<UserFactory> */
+    /** @use HasFactory<CategoryFactory> */
     use HasFactory;
 
     /**
@@ -23,13 +24,14 @@ class User extends Model
     protected function casts(): array
     {
         return [
-            'currency' => Currency::class,
+            'keywords' => 'array',
+            'type' => TransactionType::class,
         ];
     }
 
-    public function categories(): HasMany
+    public function user(): BelongsTo
     {
-        return $this->hasMany(Category::class);
+        return $this->belongsTo(User::class);
     }
 
     public function transactions(): HasMany

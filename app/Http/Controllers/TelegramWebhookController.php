@@ -29,7 +29,8 @@ class TelegramWebhookController extends Controller
     private function updateType(array $update): ?string
     {
         $types = ['message', 'edited_message', 'channel_post', 'inline_query', 'callback_query'];
-        return array_find($types, fn($type) => array_key_exists($type, $update));
+
+        return array_find($types, fn ($type) => array_key_exists($type, $update));
 
     }
 }
