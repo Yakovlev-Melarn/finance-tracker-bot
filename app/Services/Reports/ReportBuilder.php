@@ -5,6 +5,7 @@ namespace App\Services\Reports;
 use App\Currency;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Support\Markdown;
 use App\TransactionType;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
@@ -86,7 +87,7 @@ final class ReportBuilder
             $lines[] = '🏆 Топ категорий (расходы):';
 
             foreach ($stats->topCategories as $position => $spend) {
-                $lines[] = sprintf('%d. %s — %s', $position + 1, $this->markdown($spend->name), $this->money($spend->total));
+                $lines[] = sprintf('%d. %s — %s', $position + 1, Markdown::escape($spend->name), $this->money($spend->total));
             }
         }
 
@@ -108,9 +109,9 @@ final class ReportBuilder
 
         foreach ($transactions as $transaction) {
             $icon = $transaction->type === TransactionType::Income ? '💵' : '💸';
-            $category = $this->markdown($transaction->category?->name ?? self::UNCATEGORIZED);
+            $category = Markdown::escape($transaction->category?->name ?? self::UNCATEGORIZED);
             $comment = $transaction->comment !== null && $transaction->comment !== ''
-                ? ' «'.$this->markdown($transaction->comment).'»'
+                ? ' «'.Markdown::escape($transaction->comment).'»'
                 : '';
             $sign = $transaction->type === TransactionType::Income ? '+' : '−';
             $dateTime = $transaction->created_at?->format('d.m H:i') ?? '—';
@@ -136,13 +137,5 @@ final class ReportBuilder
     private function money(float|int|string $amount): string
     {
         return number_format((float) $amount, 2, '.', '');
-    }
-
-    /**
-     * Escape legacy-Telegram-Markdown special characters in user-provided text.
-     */
-    private function markdown(string $text): string
-    {
-        return (string) preg_replace('/([*_`\[\]])/', '\\\\$1', $text);
     }
 }

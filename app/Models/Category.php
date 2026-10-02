@@ -5,6 +5,7 @@ namespace App\Models;
 use App\TransactionType;
 use Database\Factories\CategoryFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -22,6 +23,8 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $updated_at
  * @property-read Collection<int, Transaction> $transactions
  * @property-read User|null $user
+ *
+ * @method static Builder<static> where(string $column, mixed $operator = null, mixed $value = null, string $boolean = 'and')
  */
 #[Fillable(['user_id', 'name', 'keywords', 'type'])]
 class Category extends Model
