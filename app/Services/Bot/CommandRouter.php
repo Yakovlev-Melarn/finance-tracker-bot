@@ -7,6 +7,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Parser\TransactionParseException;
 use App\Services\Parser\TransactionParser;
+use App\Services\Reports\ReportBuilder;
 use App\TransactionType;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 
@@ -15,6 +16,7 @@ readonly class CommandRouter
     public function __construct(
         private BotMessenger $bot,
         private TransactionParser $parser,
+        private ReportBuilder $reports,
     ) {}
 
     /**
@@ -36,13 +38,44 @@ readonly class CommandRouter
         $chatId = (int) $message['chat']['id'];
         $from = $message['from'] ?? [];
 
-        if ($this->command($text) === 'start') {
-            $this->registerUser($chatId, $from);
+        match ($this->command($text)) {
+            'start' => $this->registerUser($chatId, $from),
+            'stats' => $this->sendStats($chatId, $from),
+            'history' => $this->sendHistory($chatId, $from),
+            default => $this->recordTransaction($chatId, $from, $text),
+        };
+    }
 
-            return;
-        }
+    /**
+     * Send the user's weekly summary.
+     *
+     * @param  array<string, mixed>  $from
+     *
+     * @throws TelegramSDKException
+     */
+    private function sendStats(int $chatId, array $from): void
+    {
+        $user = $this->userFor($from);
 
-        $this->recordTransaction($chatId, $from, $text);
+        $stats = $this->reports->weekStats($user);
+
+        $this->bot->sendMessage($chatId, $this->reports->formatWeekStats($stats, $user->currency), 'Markdown');
+    }
+
+    /**
+     * Send the user's most recent transactions.
+     *
+     * @param  array<string, mixed>  $from
+     *
+     * @throws TelegramSDKException
+     */
+    private function sendHistory(int $chatId, array $from): void
+    {
+        $user = $this->userFor($from);
+
+        $transactions = $this->reports->recentTransactions($user);
+
+        $this->bot->sendMessage($chatId, $this->reports->formatHistory($transactions, $user->currency), 'Markdown');
     }
 
     /**

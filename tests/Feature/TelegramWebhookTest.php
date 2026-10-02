@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\Category;
+use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Bot\BotMessenger;
 use App\TransactionType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Mockery;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 use Tests\TestCase;
 
@@ -228,5 +230,90 @@ class TelegramWebhookTest extends TestCase
         $response->assertStatus(500);
         $response->assertJson(['ok' => false]);
         $this->assertDatabaseHas('users', ['telegram_id' => 42]);
+    }
+
+    public function test_stats_command_sends_weekly_summary_as_markdown(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $salary = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Зарплата',
+            'keywords' => ['зарплата'],
+            'type' => TransactionType::Income,
+        ]);
+        Transaction::factory()->create([
+            'user_id' => $user->id,
+            'category_id' => $salary->id,
+            'amount' => 50000,
+            'type' => TransactionType::Income,
+            'created_at' => now()->subDay(),
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, '💵 Доходы: *50000.00 RUB*')), 'Markdown');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2007,
+            'message' => [
+                'message_id' => 7,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/stats',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_history_command_sends_recent_transactions_as_markdown(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        Transaction::factory()->create([
+            'user_id' => $user->id,
+            'category_id' => $coffee->id,
+            'amount' => 150,
+            'type' => TransactionType::Expense,
+            'comment' => 'кофе',
+            'created_at' => now()->subDay(),
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Кофе') && str_contains($text, '150.00 RUB')), 'Markdown');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2008,
+            'message' => [
+                'message_id' => 8,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/history',
+            ],
+        ]);
+
+        $response->assertOk();
     }
 }
