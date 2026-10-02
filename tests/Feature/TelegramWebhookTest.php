@@ -6,8 +6,10 @@ use App\Models\Category;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Bot\BotMessenger;
+use App\Services\Bot\Menu;
 use App\TransactionType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Mockery;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 use Tests\TestCase;
@@ -15,6 +17,13 @@ use Tests\TestCase;
 class TelegramWebhookTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Cache::flush();
+    }
 
     public function test_webhook_returns_ok_for_unknown_update_shape(): void
     {
@@ -28,12 +37,12 @@ class TelegramWebhookTest extends TestCase
         $response->assertJson(['ok' => true]);
     }
 
-    public function test_start_command_registers_user_and_sends_welcome(): void
+    public function test_start_command_registers_user_and_shows_menu_photo(): void
     {
         $bot = $this->mock(BotMessenger::class);
-        $bot->shouldReceive('sendMessage')
+        $bot->shouldReceive('sendPhoto')
             ->once()
-            ->with(42, 'Привет, Ivan Petrov! Отправляй записи вида «кофе 150».');
+            ->with(42, resource_path('images/menu.png'), Menu::welcome('Ivan Petrov'), null, Menu::main());
 
         $response = $this->post('/telegram/webhook', [
             'update_id' => 2001,
@@ -66,9 +75,9 @@ class TelegramWebhookTest extends TestCase
         $user = User::factory()->create(['telegram_id' => 42, 'name' => 'Ivan Petrov']);
 
         $bot = $this->mock(BotMessenger::class);
-        $bot->shouldReceive('sendMessage')
+        $bot->shouldReceive('sendPhoto')
             ->once()
-            ->with(42, 'Привет, Ivan Petrov! Отправляй записи вида «кофе 150».');
+            ->with(42, resource_path('images/menu.png'), Menu::welcome('Ivan Petrov'), null, Menu::main());
 
         $this->post('/telegram/webhook', [
             'update_id' => 2002,
@@ -206,7 +215,7 @@ class TelegramWebhookTest extends TestCase
     public function test_reply_failure_returns_500_to_trigger_redelivery(): void
     {
         $bot = $this->mock(BotMessenger::class);
-        $bot->shouldReceive('sendMessage')
+        $bot->shouldReceive('sendPhoto')
             ->once()
             ->andThrow(new TelegramSDKException('cURL error 35: TLS connect error'));
 
@@ -336,7 +345,7 @@ class TelegramWebhookTest extends TestCase
         $bot = $this->mock(BotMessenger::class);
         $bot->shouldReceive('sendMessage')
             ->once()
-            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Кофе: кофе, латте') && str_contains($text, 'Зарплата: зарплата')), 'Markdown');
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Кофе: кофе, латте') && str_contains($text, 'Зарплата: зарплата')), 'Markdown', Menu::categories());
 
         $response = $this->post('/telegram/webhook', [
             'update_id' => 2009,
@@ -538,5 +547,187 @@ class TelegramWebhookTest extends TestCase
         ]);
 
         $response->assertOk();
+    }
+
+    public function test_callback_query_button_sends_weekly_report(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once()->with(5001);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Доходы')), 'Markdown');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2015,
+            'callback_query' => [
+                'id' => '5001',
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'message' => [
+                    'message_id' => 99,
+                    'chat' => [
+                        'id' => 42,
+                        'type' => 'private',
+                    ],
+                ],
+                'data' => 'stats',
+            ],
+        ]);
+
+        $response->assertOk();
+        $response->assertJson(['ok' => true]);
+    }
+
+    public function test_menu_button_edits_existing_message_in_place(): void
+    {
+        User::factory()->create(['telegram_id' => 42, 'name' => 'Ivan']);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once()->with(5002);
+        $bot->shouldReceive('editMessage')
+            ->once()
+            ->with(42, 99, Menu::welcome('Ivan'), null, Menu::main());
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2016,
+            'callback_query' => [
+                'id' => '5002',
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'message' => [
+                    'message_id' => 99,
+                    'chat' => [
+                        'id' => 42,
+                        'type' => 'private',
+                    ],
+                ],
+                'data' => 'menu',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_pending_category_add_creates_category_from_followup_text(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once()->with(5003);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '➕ Отправь название и ключевые слова через запятую, например: «Кофе, кофе, латте, капучино»');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2017,
+            'callback_query' => [
+                'id' => '5003',
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'message' => [
+                    'message_id' => 99,
+                    'chat' => [
+                        'id' => 42,
+                        'type' => 'private',
+                    ],
+                ],
+                'data' => 'cats_add',
+            ],
+        ])->assertOk();
+
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '✅ Категория «Кофе» создана, кофе, латте.');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2018,
+            'message' => [
+                'message_id' => 100,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => 'Кофе, кофе, латте',
+            ],
+        ]);
+
+        $response->assertOk();
+        $this->assertDatabaseHas('categories', ['name' => 'Кофе']);
+        $this->assertNull(Cache::get('bot:pending-action:42'));
+    }
+
+    public function test_pending_category_action_error_replies_with_menu_and_clears_pending(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once()->with(5004);
+        $bot->shouldReceive('sendMessage')->once()->with(42, '🗑 Отправь название категории, например: «Кофе»');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2019,
+            'callback_query' => [
+                'id' => '5004',
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'message' => [
+                    'message_id' => 99,
+                    'chat' => [
+                        'id' => 42,
+                        'type' => 'private',
+                    ],
+                ],
+                'data' => 'cats_delete',
+            ],
+        ])->assertOk();
+
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'не найдена') && str_contains($text, '🏠 В меню')), null, Menu::main());
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2020,
+            'message' => [
+                'message_id' => 101,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => 'Чай',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('categories', ['name' => 'Кофе']);
+        $this->assertNull(Cache::get('bot:pending-action:42'));
     }
 }

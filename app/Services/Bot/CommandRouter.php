@@ -7,14 +7,13 @@ use App\Models\Category;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Categories\CategoryException;
+use App\Services\Categories\CategoryFormatter;
 use App\Services\Categories\CategoryManager;
 use App\Services\Parser\TransactionParseException;
 use App\Services\Parser\TransactionParser;
 use App\Services\Reports\ReportBuilder;
-use App\Support\Markdown;
 use App\Support\RussianPlural;
 use App\TransactionType;
-use Illuminate\Database\Eloquent\Collection;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 
 readonly class CommandRouter
@@ -24,17 +23,27 @@ readonly class CommandRouter
         private TransactionParser $parser,
         private ReportBuilder $reports,
         private CategoryManager $categories,
+        private CallbackRouter $callbacks,
+        private PendingAction $pending,
     ) {}
 
     /**
      * Route an incoming Telegram update to the appropriate handler.
      *
-     * @param  array{message?: array<string, mixed>}  $update
+     * @param  array{message?: array<string, mixed>, callback_query?: array<string, mixed>}  $update
      *
      * @throws TelegramSDKException
      */
     public function handle(array $update): void
     {
+        $callback = $update['callback_query'] ?? null;
+
+        if (is_array($callback)) {
+            $this->callbacks->handle($callback);
+
+            return;
+        }
+
         $message = $update['message'] ?? null;
 
         if (! is_array($message) || blank($message['text'] ?? null)) {
@@ -50,7 +59,7 @@ readonly class CommandRouter
             'stats' => $this->sendStats($chatId, $from),
             'history' => $this->sendHistory($chatId, $from),
             'categories' => $this->handleCategories($chatId, $from, $text),
-            default => $this->recordTransaction($chatId, $from, $text),
+            default => $this->handleText($chatId, $from, $text),
         };
     }
 
@@ -68,7 +77,7 @@ readonly class CommandRouter
 
         try {
             if ($args === '') {
-                $this->bot->sendMessage($chatId, $this->formatCategoryList($this->categories->all($user)), 'Markdown');
+                $this->bot->sendMessage($chatId, CategoryFormatter::list($this->categories->all($user)), 'Markdown', Menu::categories());
 
                 return;
             }
@@ -181,33 +190,6 @@ readonly class CommandRouter
         ));
     }
 
-    /**
-     * @param  Collection<int, Category>  $categories
-     */
-    private function formatCategoryList(Collection $categories): string
-    {
-        if ($categories->isEmpty()) {
-            return implode("\n", [
-                '🗂 *Мои категории:*',
-                '',
-                'Пока пусто. Добавьте: /categories add Кофе, кофе, латте',
-            ]);
-        }
-
-        $lines = ['🗂 *Мои категории:*', ''];
-
-        foreach ($categories as $category) {
-            $icon = $category->type === TransactionType::Income ? '💵' : '💸';
-            $keywords = $category->keywords === []
-                ? 'без ключевых слов'
-                : implode(', ', array_map(Markdown::escape(...), $category->keywords));
-
-            $lines[] = sprintf('%s %s: %s', $icon, Markdown::escape($category->name), $keywords);
-        }
-
-        return implode("\n", $lines);
-    }
-
     private function categoryCreated(Category $category): string
     {
         $keywords = $category->keywords === [] ? '' : ', '.implode(', ', $category->keywords);
@@ -264,7 +246,7 @@ readonly class CommandRouter
     }
 
     /**
-     * Register the user behind the /start command and greet them.
+     * Register the user behind the /start command and show them the main menu.
      *
      * @param  array<string, mixed>  $from
      *
@@ -274,20 +256,48 @@ readonly class CommandRouter
     {
         $user = $this->userFor($from);
 
-        $this->bot->sendMessage($chatId, sprintf('Привет, %s! Отправляй записи вида «кофе 150».', $user->name));
+        $this->bot->sendPhoto($chatId, resource_path('images/menu.png'), Menu::welcome($user->name), null, Menu::main());
     }
 
     /**
-     * Parse a free-text message into a transaction, store it and confirm.
+     * Handle free text: a pending category action first, otherwise a transaction.
      *
      * @param  array<string, mixed>  $from
      *
      * @throws TelegramSDKException
      */
-    private function recordTransaction(int $chatId, array $from, string $text): void
+    private function handleText(int $chatId, array $from, string $text): void
     {
         $user = $this->userFor($from);
+        $action = $this->pending->get($user->telegram_id);
 
+        if ($action === null) {
+            $this->recordTransaction($chatId, $user, $text);
+
+            return;
+        }
+
+        $this->pending->clear($user->telegram_id);
+
+        try {
+            match ($action) {
+                'cats_add' => $this->categoriesAdd($user, $text, $chatId),
+                'cats_rename' => $this->categoriesRename($user, $text, $chatId),
+                'cats_delete' => $this->categoriesDelete($user, $text, $chatId),
+                default => $this->recordTransaction($chatId, $user, $text),
+            };
+        } catch (CategoryException $exception) {
+            $this->bot->sendMessage($chatId, $exception->getMessage()."\n\nНажми «🏠 В меню», чтобы вернуться в меню.", null, Menu::main());
+        }
+    }
+
+    /**
+     * Parse a free-text message into a transaction, store it and confirm.
+     *
+     * @throws TelegramSDKException
+     */
+    private function recordTransaction(int $chatId, User $user, string $text): void
+    {
         try {
             $parsed = $this->parser->parse($text, $user->categories()->get());
         } catch (TransactionParseException) {
