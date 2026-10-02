@@ -23,7 +23,8 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, Transaction> $transactions
  *
  * @method static User firstOrCreate(array $attributes, array|callable $values = [])
- * @method static Builder where(string $column, mixed $operator = null, mixed $value = null, string $boolean = 'and')
+ * @method static Builder<static> all()
+ * @method static Builder<static> where(string $column, mixed $operator = null, mixed $value = null, string $boolean = 'and')
  */
 #[Fillable(['telegram_id', 'name', 'currency'])]
 class User extends Model
