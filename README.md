@@ -1,58 +1,148 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Finance Tracker Bot
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Telegram-бот для учёта личных финансов: записывайте доходы и расходы свободным текстом — бот автоматически определяет категорию, ведёт историю, показывает отчёты и присылает еженедельную сводку.
 
-## About Laravel
+## Возможности
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- Интерактивное меню с кнопками (главное меню + подменю категорий)
+- Текстовые записи в свободной форме: «кофе 150», «зарплата 120000»
+- Категории по ключевым словам: создание, переименование, удаление (кнопками и командами)
+- Отчёт за 7 дней: доходы, расходы, баланс, топ категорий
+- История последних записей
+- Автоматическая еженедельная сводка всем пользователям (понедельник, 09:00 МСК)
+- Markdown-форматирование и ретраи при сетевых сбоях Telegram
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Стек
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+| Компонент | Версия |
+|---|---|
+| PHP | 8.4 (требуется 8.3+) |
+| Laravel | 13 |
+| PostgreSQL | 16 (в тестах — SQLite в памяти) |
+| Telegram SDK | irazasyed/telegram-bot-sdk 3.x |
+| Тесты | PHPUnit 12 + Mockery |
+| Стиль кода | Laravel Pint |
 
-## Learning Laravel
+## Установка
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+1. Клонировать репозиторий:
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+   ```bash
+   git clone <repo-url> finance-tracker-bot && cd finance-tracker-bot
+   ```
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+2. Установить зависимости:
 
-## Agentic Development
+   ```bash
+   composer install
+   npm install
+   ```
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+3. Настроить окружение:
 
-```bash
-composer require laravel/boost --dev
+   ```bash
+   cp .env.example .env
+   php artisan key:generate
+   ```
 
-php artisan boost:install
+   Заполнить в `.env`:
+   - `DB_*` — доступы к PostgreSQL;
+   - `TELEGRAM_BOT_TOKEN` — токен бота от [@BotFather](https://t.me/BotFather);
+   - `TELEGRAM_WEBHOOK_URL` — публичный HTTPS-URL вебхука (например `https://bot.example.com/telegram/webhook`);
+   - `TELEGRAM_PROXY` (опционально) — исходящий HTTP-прокси, если сервер не имеет прямого доступа к API Telegram.
+
+4. Создать базу и миграции:
+
+   ```bash
+   php artisan migrate
+   ```
+
+5. Собрать фронтенд (страница `/`):
+
+   ```bash
+   npm run build
+   ```
+
+6. Запустить приложение (локально `php artisan serve` или nginx; в продакшене — фактический сервер приложения) и зарегистрировать вебхук:
+
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://bot.example.com/telegram/webhook"
+   ```
+
+   Проверить: `curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"`.
+
+## Использование бота
+
+| Команда / действие | Что делает |
+|---|---|
+| `/start` | Регистрация и главное меню (картинка + кнопки) |
+| «кофе 150» | Записать расход (категория — по ключевым словам) |
+| «зарплата 120000» | Записать доход |
+| `/stats` | Отчёт за 7 дней |
+| `/history` | Последние записи |
+| `/categories` | Список категорий + подменю кнопок |
+| `/categories add Кофе, кофе, латте` | Создать категорию |
+| `/categories rename Кофе, Капучино, эспрессо` | Переименовать (и заменить ключевые слова) |
+| `/categories delete Кофе` | Удалить (записи становятся без категории) |
+| Кнопки 📝 📊 📜 🗂 | Меню: запись, отчёт, история, категории |
+
+Кнопки «➕ Добавить / ✏️ Переименовать / 🗑 Удалить» в подменю категорий переводят бота в режим ожидания: следующее текстовое сообщение интерпретируется как соответствующее действие (состояние хранится в кэше, TTL 15 минут; любой другой клик по кнопке отменяет ожидание).
+
+## Архитектура
+
+Запрос:
+
+```
+Telegram ──HTTPS──> POST /telegram/webhook
+                        │
+                        ▼
+              TelegramWebhookController
+                        │
+              CommandRouter::handle(update)
+              ┌─────────┴──────────┐
+     message (текст)        callback_query (кнопка)
+              │                       │
+              ▼                       ▼
+   команды / действие         CallbackRouter
+   категории (pending)        (меню, отчёты, подменю)
+              │                       │
+              ▼                       │
+     TransactionParser ───────────────┤
+     + CategoryMatcher                │
+              │                       │
+              ▼                       ▼
+     BotService (BotMessenger) ──> Telegram API
+     (отправка, клавиатуры, ретраи)
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Модули:
 
-## Contributing
+- `app/Http/Controllers/TelegramWebhookController.php` — приём апдейтов; при ошибке ответа возвращает 500, чтобы Telegram повторил доставку.
+- `app/Services/Bot/`
+  - `BotMessenger` / `BotService` — Telegram API: сообщения, фото, редактирование, inline-клавиатуры (JSON `reply_markup`), ответы на callback, ретраи.
+  - `CommandRouter` — роутинг текстовых сообщений: команды, записи, действия категорий (pending).
+  - `CallbackRouter` — обработка нажатий кнопок.
+  - `Menu` — клавиатуры и welcome-текст.
+  - `PendingAction` — состояние «ждём ввод» (кэш, TTL 15 минут).
+- `app/Services/Parser/` — `TransactionParser` (текст → сумма/тип/комментарий), `CategoryMatcher` (совпадение ключевых слов), `ParsedTransaction`.
+- `app/Services/Categories/` — `CategoryManager` (CRUD: уникальность имени/ключей на пользователя, нормализация, снятие категории с записей при удалении), `CategoryFormatter` (Markdown-список).
+- `app/Services/Reports/` — `ReportBuilder` (сводка за 7 дней, история), DTO `WeekStats`, `CategorySpend`.
+- `app/Models/` — `User`, `Category`, `Transaction`.
+- `app/Support/` — `Markdown` (экранирование для Telegram), `RussianPlural` (склонение).
+- `app/Console/Commands/WeeklyReportCommand.php` — команда `reports:weekly`; расписание в `routes/console.php` (еженедельно, понедельник 09:00 Europe/Moscow).
+- `resources/images/menu.png` — картинка главного меню.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Тесты и стиль
 
-## Code of Conduct
+```bash
+php artisan test          # 89 тестов
+vendor/bin/pint --test    # проверка стиля
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Деплой
 
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+- `deploy.sh` (выполняется на VPS после пуша): pull → `composer install` → `npm run build` → `migrate` → кэши конфигурации/маршрутов/Blade → права на `storage`.
+- Планировщик: systemd-таймер `laravel-schedule` (каждую минуту `php artisan schedule:run`) — запускает `reports:weekly`.
+- HTTPS: nginx + Let's Encrypt (автопродление certbot).
+- Webhook настраивается один раз через `setWebhook` на публичный URL; при ошибке обработки контроллер отвечает 500, и Telegram повторно доставляет апдейт.
