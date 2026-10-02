@@ -107,7 +107,7 @@ readonly class BotService implements BotMessenger
         }
 
         if ($keyboard !== null) {
-            $params['reply_markup'] = $this->keyboard($keyboard);
+            $params['reply_markup'] = json_encode($this->keyboard($keyboard), JSON_UNESCAPED_UNICODE);
         }
     }
 
