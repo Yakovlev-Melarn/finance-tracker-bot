@@ -28,7 +28,7 @@ Telegram-бот для учёта личных финансов: записыв�
 1. Клонировать репозиторий:
 
    ```bash
-   git clone <repo-url> finance-tracker-bot && cd finance-tracker-bot
+   git clone https://github.com/Yakovlev-Melarn/finance-tracker-bot.git && cd finance-tracker-bot
    ```
 
 2. Установить зависимости:
