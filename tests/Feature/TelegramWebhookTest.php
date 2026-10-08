@@ -1120,4 +1120,314 @@ class TelegramWebhookTest extends TestCase
 
         $response->assertOk();
     }
+
+    public function test_recurring_command_lists_empty_entries(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Пока нет') && str_contains($text, '/recurring add Подписка 500 1')), 'Markdown');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2031,
+            'message' => [
+                'message_id' => 112,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_command_lists_entries(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $user->recurringTransactions()->create([
+            'name' => 'Подписка',
+            'amount' => 500.0,
+            'day' => 1,
+            'type' => TransactionType::Expense,
+        ]);
+        $user->recurringTransactions()->create([
+            'name' => 'Зарплата',
+            'amount' => 120000.0,
+            'day' => 5,
+            'type' => TransactionType::Income,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Подписка — 500.00 RUB, 1-е число (расход)') && str_contains($text, 'Зарплата — 120000.00 RUB, 5-е число (доход)')), 'Markdown');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2032,
+            'message' => [
+                'message_id' => 113,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_add_creates_entry(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '✅ Регулярная запись «Подписка» создана: 500.00 RUB, 1-е число (расход).');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2033,
+            'message' => [
+                'message_id' => 114,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring add Подписка 500 1',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('recurring_transactions', [
+            'user_id' => $user->id,
+            'name' => 'Подписка',
+            'amount' => 500.0,
+            'day' => 1,
+            'type' => 'expense',
+        ]);
+    }
+
+    public function test_recurring_add_creates_income_entry_with_multiword_name(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '✅ Регулярная запись «Зарплата за проект» создана: 120000.00 RUB, 5-е число (доход).');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2034,
+            'message' => [
+                'message_id' => 115,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring add Зарплата за проект 120000 5 доход',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('recurring_transactions', [
+            'user_id' => $user->id,
+            'name' => 'Зарплата за проект',
+            'type' => 'income',
+        ]);
+    }
+
+    public function test_recurring_add_rejects_invalid_day(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Число месяца должно быть числом от 1 до 31.');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2035,
+            'message' => [
+                'message_id' => 116,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring add Подписка 500 32',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_add_rejects_invalid_amount(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Укажите сумму числом, например: /recurring add Подписка 500 1');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2036,
+            'message' => [
+                'message_id' => 117,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring add Подписка abc 1',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_add_rejects_duplicate_name(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $user->recurringTransactions()->create([
+            'name' => 'Подписка',
+            'amount' => 500.0,
+            'day' => 1,
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Запись «Подписка» уже существует.');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2037,
+            'message' => [
+                'message_id' => 118,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring add ПОДПИСКА 700 2',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_delete_removes_entry(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $user->recurringTransactions()->create([
+            'name' => 'Подписка',
+            'amount' => 500.0,
+            'day' => 1,
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '🗑 Регулярная запись «Подписка» удалена.');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2038,
+            'message' => [
+                'message_id' => 119,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring delete Подписка',
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseCount('recurring_transactions', 0);
+    }
+
+    public function test_recurring_delete_unknown_entry_replies_with_hint(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Запись «Чай» не найдена.');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2039,
+            'message' => [
+                'message_id' => 120,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring delete Чай',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_recurring_with_unknown_action_shows_usage(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Управление регулярными записями') && str_contains($text, '/recurring add')));
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2040,
+            'message' => [
+                'message_id' => 121,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/recurring foo',
+            ],
+        ])->assertOk();
+    }
 }

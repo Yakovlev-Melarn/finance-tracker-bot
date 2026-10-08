@@ -13,6 +13,8 @@ use App\Services\Categories\CategoryFormatter;
 use App\Services\Categories\CategoryManager;
 use App\Services\Parser\TransactionParseException;
 use App\Services\Parser\TransactionParser;
+use App\Services\Recurring\RecurringException;
+use App\Services\Recurring\RecurringManager;
 use App\Services\Reports\ReportBuilder;
 use App\Support\Markdown;
 use App\Support\RussianPlural;
@@ -30,6 +32,7 @@ readonly class CommandRouter
         private ReportBuilder $reports,
         private CategoryManager $categories,
         private BudgetManager $budgets,
+        private RecurringManager $recurring,
         private CallbackRouter $callbacks,
         private PendingAction $pending,
     ) {}
@@ -67,6 +70,7 @@ readonly class CommandRouter
             'history' => $this->sendHistory($chatId, $from),
             'categories' => $this->handleCategories($chatId, $from, $text),
             'budget' => $this->handleBudgets($chatId, $from, $text),
+            'recurring' => $this->handleRecurring($chatId, $from, $text),
             default => $this->handleText($chatId, $from, $text),
         };
     }
@@ -199,8 +203,6 @@ readonly class CommandRouter
         return (float) $raw;
     }
 
-    /**
-     */
     private function formatBudgetList(User $user): string
     {
         $budgets = $this->budgets->allFor($user);
@@ -223,8 +225,6 @@ readonly class CommandRouter
         return trim(implode("\n", $lines));
     }
 
-    /**
-     */
     private function budgetProgressLine(User $user, Category $category, float $limit): string
     {
         $spent = $this->budgets->spent($user, $category);
@@ -246,6 +246,162 @@ readonly class CommandRouter
         $filled = (int) min(10, (int) round($percent / 10));
 
         return '['.str_repeat('█', $filled).str_repeat('░', 10 - $filled).']';
+    }
+
+    /**
+     * Handle /recurring: list, add and delete scheduled monthly entries.
+     *
+     * @param  array<string, mixed>  $from
+     *
+     * @throws TelegramSDKException
+     */
+    private function handleRecurring(int $chatId, array $from, string $text): void
+    {
+        $user = $this->userFor($from);
+        $args = $this->argumentsAfter($text);
+
+        try {
+            if ($args === '') {
+                $this->bot->sendMessage($chatId, $this->formatRecurringList($user), 'Markdown');
+
+                return;
+            }
+
+            $tokens = explode(' ', $args);
+
+            match (mb_strtolower($tokens[0])) {
+                'add' => $this->recurringAdd($user, $tokens, $chatId),
+                'delete' => $this->recurringDelete($user, $tokens, $chatId),
+                default => $this->bot->sendMessage($chatId, $this->recurringUsage()),
+            };
+        } catch (RecurringException $exception) {
+            $this->bot->sendMessage($chatId, $exception->getMessage());
+        }
+    }
+
+    /**
+     * /recurring add Название [слово ...] сумма число [доход]
+     *
+     * @param  list<string>  $tokens
+     *
+     * @throws RecurringException
+     * @throws TelegramSDKException
+     */
+    private function recurringAdd(User $user, array $tokens, int $chatId): void
+    {
+        $type = TransactionType::Expense;
+        $rest = array_slice($tokens, 1);
+
+        if ($rest !== [] && in_array(mb_strtolower(end($rest)), ['доход', 'доходы', 'income'], true)) {
+            $type = TransactionType::Income;
+            $rest = array_slice($rest, 0, -1);
+        }
+
+        if (count($rest) < 3) {
+            throw new RecurringException($this->recurringUsage());
+        }
+
+        $name = implode(' ', array_slice($rest, 0, -2));
+        $amount = $this->parseRecurringAmount($rest[count($rest) - 2]);
+        $day = $this->parseRecurringDay($rest[count($rest) - 1]);
+
+        $entry = $this->recurring->add($user, $name, $amount, $day, $type);
+
+        $direction = $type === TransactionType::Income ? 'доход' : 'расход';
+
+        $this->bot->sendMessage($chatId, sprintf('✅ Регулярная запись «%s» создана: %s %s, %d-е число (%s).', $entry->name, number_format((float) $entry->amount, 2, '.', ''), $user->currency->value, $entry->day, $direction));
+    }
+
+    /**
+     * /recurring delete Название
+     *
+     * @param  list<string>  $tokens
+     *
+     * @throws RecurringException
+     * @throws TelegramSDKException
+     */
+    private function recurringDelete(User $user, array $tokens, int $chatId): void
+    {
+        $name = trim(implode(' ', array_slice($tokens, 1)));
+
+        if ($name === '') {
+            throw new RecurringException('Укажите название записи, например: /recurring delete Подписка');
+        }
+
+        $this->recurring->remove($user, $name);
+
+        $this->bot->sendMessage($chatId, sprintf('🗑 Регулярная запись «%s» удалена.', $name));
+    }
+
+    /**
+     * @throws RecurringException
+     */
+    private function parseRecurringAmount(string $raw): float
+    {
+        $raw = str_replace(',', '.', trim($raw));
+
+        if (! is_numeric($raw) || (float) $raw <= 0) {
+            throw new RecurringException('Укажите сумму числом, например: /recurring add Подписка 500 1');
+        }
+
+        return (float) $raw;
+    }
+
+    /**
+     * @throws RecurringException
+     */
+    private function parseRecurringDay(string $raw): int
+    {
+        if (! is_numeric($raw) || (int) $raw != (float) $raw || (int) $raw < 1 || (int) $raw > 31) {
+            throw new RecurringException('Число месяца должно быть числом от 1 до 31.');
+        }
+
+        return (int) $raw;
+    }
+
+    /**
+     */
+    private function formatRecurringList(User $user): string
+    {
+        $entries = $this->recurring->allFor($user);
+
+        if ($entries->isEmpty()) {
+            return implode("\n", [
+                '🔁 *Регулярные записи:*',
+                '',
+                'Пока нет. Пример: /recurring add Подписка 500 1 — 500 '.$user->currency->value.' 1-го числа каждого месяца.',
+            ]);
+        }
+
+        $lines = ['🔁 *Регулярные записи:*', ''];
+
+        foreach ($entries as $entry) {
+            $direction = $entry->type === TransactionType::Income ? 'доход' : 'расход';
+
+            $lines[] = sprintf('%s — %s %s, %d-е число (%s)%s',
+                Markdown::escape($entry->name),
+                number_format((float) $entry->amount, 2, '.', ''),
+                $user->currency->value,
+                $entry->day,
+                $direction,
+                $entry->category !== null ? ', '.$entry->category->name : '',
+            );
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function recurringUsage(): string
+    {
+        return implode("\n", [
+            'Управление регулярными записями:',
+            '/recurring — список',
+            '/recurring add Подписка 500 1 — создать (название, сумма, число месяца)',
+            '/recurring add Зарплата 120000 5 доход — создать доходную',
+            '/recurring delete Подписка — удалить',
+            '',
+            'Числа 30 и 31 в коротких месяцах не выполняются.',
+        ]);
     }
 
     /**
