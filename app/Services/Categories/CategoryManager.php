@@ -56,7 +56,7 @@ final class CategoryManager
     public function rename(User $user, string $oldName, string $newName, array $keywords = []): Category
     {
         $categories = $user->categories()->get();
-        $category = $this->findByName($categories, $oldName);
+        $category = $this->categoryNamed($categories, $oldName);
         $newName = $this->normalizeName($newName);
         $keywords = $keywords === [] ? $category->keywords : $this->normalizeKeywords($keywords);
 
@@ -83,7 +83,7 @@ final class CategoryManager
      */
     public function delete(User $user, string $name): int
     {
-        $category = $this->findByName($user->categories()->get(), $name);
+        $category = $this->categoryNamed($user->categories()->get(), $name);
 
         $affected = $category->transactions()->update(['category_id' => null]);
         $category->delete();
@@ -92,11 +92,21 @@ final class CategoryManager
     }
 
     /**
+     * Find one of the user's categories by (case-insensitive) name.
+     *
+     * @throws CategoryException
+     */
+    public function findByName(User $user, string $name): Category
+    {
+        return $this->categoryNamed($user->categories()->get(), $name);
+    }
+
+    /**
      * @param  Collection<int, Category>  $categories
      *
      * @throws CategoryException
      */
-    private function findByName(Collection $categories, string $name): Category
+    private function categoryNamed(Collection $categories, string $name): Category
     {
         return $categories->first(
             static fn (Category $category): bool => self::sameName($category->name, $name),

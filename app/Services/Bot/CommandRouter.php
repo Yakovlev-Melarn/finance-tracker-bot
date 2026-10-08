@@ -6,23 +6,30 @@ use App\Currency;
 use App\Models\Category;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Services\Budgets\BudgetException;
+use App\Services\Budgets\BudgetManager;
 use App\Services\Categories\CategoryException;
 use App\Services\Categories\CategoryFormatter;
 use App\Services\Categories\CategoryManager;
 use App\Services\Parser\TransactionParseException;
 use App\Services\Parser\TransactionParser;
 use App\Services\Reports\ReportBuilder;
+use App\Support\Markdown;
 use App\Support\RussianPlural;
 use App\TransactionType;
+use Illuminate\Support\Carbon;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 
 readonly class CommandRouter
 {
+    private const array MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+
     public function __construct(
         private BotMessenger $bot,
         private TransactionParser $parser,
         private ReportBuilder $reports,
         private CategoryManager $categories,
+        private BudgetManager $budgets,
         private CallbackRouter $callbacks,
         private PendingAction $pending,
     ) {}
@@ -59,6 +66,7 @@ readonly class CommandRouter
             'stats' => $this->sendStats($chatId, $from),
             'history' => $this->sendHistory($chatId, $from),
             'categories' => $this->handleCategories($chatId, $from, $text),
+            'budget' => $this->handleBudgets($chatId, $from, $text),
             default => $this->handleText($chatId, $from, $text),
         };
     }
@@ -93,6 +101,151 @@ readonly class CommandRouter
         } catch (CategoryException $exception) {
             $this->bot->sendMessage($chatId, $exception->getMessage());
         }
+    }
+
+    /**
+     * Handle /budget: list, set, show and delete monthly category budgets.
+     *
+     * @param  array<string, mixed>  $from
+     *
+     * @throws TelegramSDKException
+     */
+    private function handleBudgets(int $chatId, array $from, string $text): void
+    {
+        $user = $this->userFor($from);
+        $args = $this->argumentsAfter($text);
+
+        try {
+            if ($args === '') {
+                $this->bot->sendMessage($chatId, $this->formatBudgetList($user), 'Markdown');
+
+                return;
+            }
+
+            $tokens = explode(' ', $args);
+
+            match (mb_strtolower($tokens[0])) {
+                'delete' => $this->budgetDelete($user, $tokens[1] ?? '', $chatId),
+                default => $this->budgetSetOrShow($user, $tokens, $chatId),
+            };
+        } catch (BudgetException|CategoryException $exception) {
+            $this->bot->sendMessage($chatId, $exception->getMessage());
+        }
+    }
+
+    /**
+     * /budget Название [сумма]
+     *
+     * @param  list<string>  $tokens
+     *
+     * @throws BudgetException
+     * @throws CategoryException
+     * @throws TelegramSDKException
+     */
+    private function budgetSetOrShow(User $user, array $tokens, int $chatId): void
+    {
+        $category = $this->categories->findByName($user, $tokens[0]);
+
+        if (count($tokens) >= 2) {
+            $amount = $this->parseBudgetAmount($tokens[1]);
+            $this->budgets->set($user, $category, $amount);
+
+            $this->bot->sendMessage($chatId, sprintf('✅ Бюджет «%s» установлен: %s %s в месяц.', $category->name, number_format($amount, 2, '.', ''), $user->currency->value));
+
+            return;
+        }
+
+        $budget = $user->budgets()->where('category_id', $category->id)->first();
+
+        if ($budget === null) {
+            $this->bot->sendMessage($chatId, sprintf('Бюджет «%s» не установлен. Пример: /budget %s 2000', $category->name, $category->name));
+
+            return;
+        }
+
+        $this->bot->sendMessage($chatId, $this->budgetProgressLine($user, $category, (float) $budget->amount), 'Markdown');
+    }
+
+    /**
+     * /budget delete Название
+     *
+     * @throws BudgetException
+     * @throws CategoryException
+     * @throws TelegramSDKException
+     */
+    private function budgetDelete(User $user, string $name, int $chatId): void
+    {
+        if ($name === '') {
+            throw new BudgetException('Укажите название категории, например: /budget delete Кофе');
+        }
+
+        $category = $this->categories->findByName($user, $name);
+        $this->budgets->remove($user, $category);
+
+        $this->bot->sendMessage($chatId, sprintf('🗑 Бюджет «%s» удалён.', $category->name));
+    }
+
+    /**
+     * @throws BudgetException
+     */
+    private function parseBudgetAmount(string $raw): float
+    {
+        $raw = str_replace(',', '.', trim($raw));
+
+        if (! is_numeric($raw) || (float) $raw <= 0) {
+            throw new BudgetException('Укажите сумму бюджета числом, например: /budget Кофе 2000');
+        }
+
+        return (float) $raw;
+    }
+
+    /**
+     */
+    private function formatBudgetList(User $user): string
+    {
+        $budgets = $this->budgets->allFor($user);
+
+        if ($budgets->isEmpty()) {
+            return implode("\n", [
+                '💰 *Бюджеты:*',
+                '',
+                'Пока нет. Пример: /budget Кофе 2000 — лимит 2000 '.$user->currency->value.' на «Кофе» в месяц.',
+            ]);
+        }
+
+        $lines = [sprintf('💰 *Бюджеты (%s):*', self::MONTHS[Carbon::now()->month - 1]), ''];
+
+        foreach ($budgets as $budget) {
+            $lines[] = $this->budgetProgressLine($user, $budget->category, $budget->amount);
+            $lines[] = '';
+        }
+
+        return trim(implode("\n", $lines));
+    }
+
+    /**
+     */
+    private function budgetProgressLine(User $user, Category $category, float $limit): string
+    {
+        $spent = $this->budgets->spent($user, $category);
+        $percent = $limit > 0 ? (int) round($spent / $limit * 100) : 0;
+
+        return sprintf('%s %s: %s / %s %s (%d%%)%s',
+            $category->type === TransactionType::Income ? '💵' : '💸',
+            Markdown::escape($category->name),
+            number_format($spent, 2, '.', ''),
+            number_format($limit, 2, '.', ''),
+            $user->currency->value,
+            $percent,
+            "\n".$this->progressBar($percent),
+        );
+    }
+
+    private function progressBar(int $percent): string
+    {
+        $filled = (int) min(10, (int) round($percent / 10));
+
+        return '['.str_repeat('█', $filled).str_repeat('░', 10 - $filled).']';
     }
 
     /**
@@ -317,6 +470,12 @@ readonly class CommandRouter
         $transaction->save();
 
         $this->bot->sendMessage($chatId, $this->confirmation($user, $transaction));
+
+        $alert = $this->budgets->alertAfterTransaction($user, $transaction);
+
+        if ($alert !== null) {
+            $this->bot->sendMessage($chatId, $alert);
+        }
     }
 
     /**

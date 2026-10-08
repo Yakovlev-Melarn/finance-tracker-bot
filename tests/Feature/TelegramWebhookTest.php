@@ -730,4 +730,394 @@ class TelegramWebhookTest extends TestCase
         $this->assertDatabaseHas('categories', ['name' => 'Кофе']);
         $this->assertNull(Cache::get('bot:pending-action:42'));
     }
+
+    public function test_budget_command_lists_empty_budgets(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Пока нет') && str_contains($text, '/budget Кофе 2000')), 'Markdown');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2021,
+            'message' => [
+                'message_id' => 102,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_budget_command_sets_budget(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '✅ Бюджет «Кофе» установлен: 2000.00 RUB в месяц.');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2022,
+            'message' => [
+                'message_id' => 103,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget Кофе 2000',
+            ],
+        ]);
+
+        $response->assertOk();
+        $this->assertDatabaseHas('budgets', [
+            'user_id' => $user->id,
+            'amount' => 2000.0,
+        ]);
+    }
+
+    public function test_budget_command_shows_budget_progress(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        $user->budgets()->create([
+            'category_id' => $coffee->id,
+            'amount' => 2000.0,
+        ]);
+        Transaction::factory()->create([
+            'user_id' => $user->id,
+            'category_id' => $coffee->id,
+            'amount' => 850.0,
+            'type' => TransactionType::Expense,
+            'created_at' => now(),
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, '850.00 / 2000.00 RUB') && str_contains($text, '(43%)')), 'Markdown');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2023,
+            'message' => [
+                'message_id' => 104,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget Кофе',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_budget_command_shows_hint_when_budget_not_set(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Бюджет «Кофе» не установлен. Пример: /budget Кофе 2000');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2024,
+            'message' => [
+                'message_id' => 105,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget Кофе',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_budget_command_deletes_budget(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        $user->budgets()->create([
+            'category_id' => $coffee->id,
+            'amount' => 2000.0,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '🗑 Бюджет «Кофе» удалён.');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2025,
+            'message' => [
+                'message_id' => 106,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget delete Кофе',
+            ],
+        ]);
+
+        $response->assertOk();
+        $this->assertDatabaseCount('budgets', 0);
+    }
+
+    public function test_budget_command_rejects_invalid_amount(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Укажите сумму бюджета числом, например: /budget Кофе 2000');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2026,
+            'message' => [
+                'message_id' => 107,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget Кофе abc',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_budget_command_unknown_category_replies_with_hint(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Категория «Чай» не найдена.');
+
+        $this->post('/telegram/webhook', [
+            'update_id' => 2027,
+            'message' => [
+                'message_id' => 108,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => '/budget Чай 2000',
+            ],
+        ])->assertOk();
+    }
+
+    public function test_expense_crossing_budget_sends_warning_alert(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        $user->budgets()->create([
+            'category_id' => $coffee->id,
+            'amount' => 2000.0,
+        ]);
+        Transaction::factory()->create([
+            'user_id' => $user->id,
+            'category_id' => $coffee->id,
+            'amount' => 700.0,
+            'type' => TransactionType::Expense,
+            'created_at' => now(),
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Записал: 900.00 RUB (расход, Кофе).');
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '⚠️ Бюджет «Кофе»: 1600.00 из 2000.00 RUB (80%).');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2028,
+            'message' => [
+                'message_id' => 109,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => 'кофе 900',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_expense_overrunning_budget_sends_overrun_alert(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        $user->budgets()->create([
+            'category_id' => $coffee->id,
+            'amount' => 2000.0,
+        ]);
+        Transaction::factory()->create([
+            'user_id' => $user->id,
+            'category_id' => $coffee->id,
+            'amount' => 1900.0,
+            'type' => TransactionType::Expense,
+            'created_at' => now(),
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Записал: 300.00 RUB (расход, Кофе).');
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '🚨 Бюджет «Кофе» превышен: 2200.00 из 2000.00 RUB.');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2029,
+            'message' => [
+                'message_id' => 110,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => 'кофе 300',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
+
+    public function test_income_transaction_does_not_trigger_budget_alert(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        $coffee = Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Кофе',
+            'keywords' => ['кофе'],
+            'type' => TransactionType::Expense,
+        ]);
+        $user->budgets()->create([
+            'category_id' => $coffee->id,
+            'amount' => 1000.0,
+        ]);
+        Category::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Зарплата',
+            'keywords' => ['зарплата'],
+            'type' => TransactionType::Income,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, 'Записал: 50000.00 RUB (доход, Зарплата).');
+
+        $response = $this->post('/telegram/webhook', [
+            'update_id' => 2030,
+            'message' => [
+                'message_id' => 111,
+                'chat' => [
+                    'id' => 42,
+                    'type' => 'private',
+                ],
+                'from' => [
+                    'id' => 42,
+                    'is_bot' => false,
+                    'first_name' => 'Ivan',
+                ],
+                'text' => 'зарплата 50000',
+            ],
+        ]);
+
+        $response->assertOk();
+    }
 }

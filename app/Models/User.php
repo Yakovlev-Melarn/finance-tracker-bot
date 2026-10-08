@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
  * @property Currency $currency
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
+ * @property-read Collection<int, Budget> $budgets
  * @property-read Collection<int, Category> $categories
  * @property-read Collection<int, Transaction> $transactions
  *
@@ -42,6 +43,14 @@ class User extends Model
         return [
             'currency' => Currency::class,
         ];
+    }
+
+    /**
+     * @return HasMany<Budget, $this>
+     */
+    public function budgets(): HasMany
+    {
+        return $this->hasMany(Budget::class);
     }
 
     /**
