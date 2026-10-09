@@ -6,6 +6,8 @@ use App\Currency;
 use App\Models\User;
 use App\Services\Categories\CategoryFormatter;
 use App\Services\Categories\CategoryManager;
+use App\Services\Recurring\RecurringFormatter;
+use App\Services\Recurring\RecurringManager;
 use App\Services\Reports\ReportBuilder;
 use Telegram\Bot\Exceptions\TelegramSDKException;
 
@@ -15,6 +17,7 @@ readonly class CallbackRouter
         private BotMessenger $bot,
         private ReportBuilder $reports,
         private CategoryManager $categories,
+        private RecurringManager $recurring,
         private PendingAction $pending,
     ) {}
 
@@ -48,6 +51,9 @@ readonly class CallbackRouter
             'cats_add' => $this->promptCategoryAction($user, $chatId, 'cats_add', '➕ Отправь название и ключевые слова через запятую, например: «Кофе, кофе, латте, капучино»'),
             'cats_rename' => $this->promptCategoryAction($user, $chatId, 'cats_rename', '✏️ Отправь старое и новое название (и новые ключевые слова), например: «Кофе, Капучино, эспрессо»'),
             'cats_delete' => $this->promptCategoryAction($user, $chatId, 'cats_delete', '🗑 Отправь название категории, например: «Кофе»'),
+            'recurring' => $this->showRecurring($user, $chatId),
+            'rec_add' => $this->promptRecurringAction($user, $chatId, 'rec_add', '➕ Отправь название, сумму и число месяца, например: «Подписка 500 1». Для дохода добавь в конце слово «доход».'),
+            'rec_delete' => $this->promptRecurringAction($user, $chatId, 'rec_delete', '🗑 Отправь название записи, например: «Подписка»'),
             default => null,
         };
     }
@@ -88,6 +94,24 @@ readonly class CallbackRouter
      * @throws TelegramSDKException
      */
     private function promptCategoryAction(User $user, int $chatId, string $action, string $text): void
+    {
+        $this->pending->set($user->telegram_id, $action);
+
+        $this->bot->sendMessage($chatId, $text);
+    }
+
+    /**
+     * @throws TelegramSDKException
+     */
+    private function showRecurring(User $user, int $chatId): void
+    {
+        $this->bot->sendMessage($chatId, RecurringFormatter::list($this->recurring->allFor($user), $user->currency), 'Markdown', Menu::recurring());
+    }
+
+    /**
+     * @throws TelegramSDKException
+     */
+    private function promptRecurringAction(User $user, int $chatId, string $action, string $text): void
     {
         $this->pending->set($user->telegram_id, $action);
 

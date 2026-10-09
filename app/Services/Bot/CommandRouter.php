@@ -14,6 +14,7 @@ use App\Services\Categories\CategoryManager;
 use App\Services\Parser\TransactionParseException;
 use App\Services\Parser\TransactionParser;
 use App\Services\Recurring\RecurringException;
+use App\Services\Recurring\RecurringFormatter;
 use App\Services\Recurring\RecurringManager;
 use App\Services\Reports\ReportBuilder;
 use App\Support\Markdown;
@@ -262,7 +263,7 @@ readonly class CommandRouter
 
         try {
             if ($args === '') {
-                $this->bot->sendMessage($chatId, $this->formatRecurringList($user), 'Markdown');
+                $this->bot->sendMessage($chatId, RecurringFormatter::list($this->recurring->allFor($user), $user->currency), 'Markdown', Menu::recurring());
 
                 return;
             }
@@ -289,8 +290,22 @@ readonly class CommandRouter
      */
     private function recurringAdd(User $user, array $tokens, int $chatId): void
     {
+        $this->recurringAddArgs($user, array_slice($tokens, 1), $chatId);
+    }
+
+    /**
+     * Parse and create a recurring entry from its raw arguments
+     * (used both by the /recurring add command and the pending menu action).
+     *
+     * @param  list<string>  $args
+     *
+     * @throws RecurringException
+     * @throws TelegramSDKException
+     */
+    private function recurringAddArgs(User $user, array $args, int $chatId): void
+    {
         $type = TransactionType::Expense;
-        $rest = array_slice($tokens, 1);
+        $rest = $args;
 
         if ($rest !== [] && in_array(mb_strtolower(end($rest)), ['доход', 'доходы', 'income'], true)) {
             $type = TransactionType::Income;
@@ -322,8 +337,18 @@ readonly class CommandRouter
      */
     private function recurringDelete(User $user, array $tokens, int $chatId): void
     {
-        $name = trim(implode(' ', array_slice($tokens, 1)));
+        $this->recurringDeleteName($user, trim(implode(' ', array_slice($tokens, 1))), $chatId);
+    }
 
+    /**
+     * Delete a recurring entry by name (used both by the /recurring delete
+     * command and the pending menu action).
+     *
+     * @throws RecurringException
+     * @throws TelegramSDKException
+     */
+    private function recurringDeleteName(User $user, string $name, int $chatId): void
+    {
         if ($name === '') {
             throw new RecurringException('Укажите название записи, например: /recurring delete Подписка');
         }
@@ -357,38 +382,6 @@ readonly class CommandRouter
         }
 
         return (int) $raw;
-    }
-
-    /**
-     */
-    private function formatRecurringList(User $user): string
-    {
-        $entries = $this->recurring->allFor($user);
-
-        if ($entries->isEmpty()) {
-            return implode("\n", [
-                '🔁 *Регулярные записи:*',
-                '',
-                'Пока нет. Пример: /recurring add Подписка 500 1 — 500 '.$user->currency->value.' 1-го числа каждого месяца.',
-            ]);
-        }
-
-        $lines = ['🔁 *Регулярные записи:*', ''];
-
-        foreach ($entries as $entry) {
-            $direction = $entry->type === TransactionType::Income ? 'доход' : 'расход';
-
-            $lines[] = sprintf('%s — %s %s, %d-е число (%s)%s',
-                Markdown::escape($entry->name),
-                number_format((float) $entry->amount, 2, '.', ''),
-                $user->currency->value,
-                $entry->day,
-                $direction,
-                $entry->category !== null ? ', '.$entry->category->name : '',
-            );
-        }
-
-        return implode("\n", $lines);
     }
 
     private function recurringUsage(): string
@@ -569,7 +562,7 @@ readonly class CommandRouter
     }
 
     /**
-     * Handle free text: a pending category action first, otherwise a transaction.
+     * Handle free text: a pending action first, otherwise a transaction.
      *
      * @param  array<string, mixed>  $from
      *
@@ -593,9 +586,11 @@ readonly class CommandRouter
                 'cats_add' => $this->categoriesAdd($user, $text, $chatId),
                 'cats_rename' => $this->categoriesRename($user, $text, $chatId),
                 'cats_delete' => $this->categoriesDelete($user, $text, $chatId),
+                'rec_add' => $this->recurringAddArgs($user, explode(' ', trim($text)), $chatId),
+                'rec_delete' => $this->recurringDeleteName($user, trim($text), $chatId),
                 default => $this->recordTransaction($chatId, $user, $text),
             };
-        } catch (CategoryException $exception) {
+        } catch (CategoryException|RecurringException $exception) {
             $this->bot->sendMessage($chatId, $exception->getMessage()."\n\nНажми «🏠 В меню», чтобы вернуться в меню.", null, Menu::main());
         }
     }

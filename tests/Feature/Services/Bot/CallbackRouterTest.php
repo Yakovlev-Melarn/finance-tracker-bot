@@ -3,6 +3,7 @@
 namespace Tests\Feature\Services\Bot;
 
 use App\Models\Category;
+use App\Models\RecurringTransaction;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Bot\BotMessenger;
@@ -180,6 +181,68 @@ class CallbackRouterTest extends TestCase
         $this->router()->handle($this->callbackQuery(['data' => 'cats_add']));
 
         $this->assertSame('cats_add', $this->app->make(PendingAction::class)->get(42));
+    }
+
+    /**
+     * @throws BindingResolutionException
+     * @throws TelegramSDKException
+     */
+    public function test_recurring_button_shows_list_with_submenu_keyboard(): void
+    {
+        $user = User::factory()->create(['telegram_id' => 42]);
+        RecurringTransaction::factory()->create([
+            'user_id' => $user->id,
+            'name' => 'Подписка',
+            'amount' => 500.0,
+            'day' => 1,
+            'type' => TransactionType::Expense,
+        ]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once();
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, Mockery::on(fn (string $text): bool => str_contains($text, 'Регулярные записи') && str_contains($text, 'Подписка')), 'Markdown', Menu::recurring());
+
+        $this->router()->handle($this->callbackQuery(['data' => 'recurring']));
+    }
+
+    /**
+     * @throws BindingResolutionException
+     * @throws TelegramSDKException
+     */
+    public function test_recurring_add_button_stores_pending_action_and_prompts(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once();
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '➕ Отправь название, сумму и число месяца, например: «Подписка 500 1». Для дохода добавь в конце слово «доход».');
+
+        $this->router()->handle($this->callbackQuery(['data' => 'rec_add']));
+
+        $this->assertSame('rec_add', $this->app->make(PendingAction::class)->get(42));
+    }
+
+    /**
+     * @throws BindingResolutionException
+     * @throws TelegramSDKException
+     */
+    public function test_recurring_delete_button_stores_pending_action_and_prompts(): void
+    {
+        User::factory()->create(['telegram_id' => 42]);
+
+        $bot = $this->mock(BotMessenger::class);
+        $bot->shouldReceive('answerCallback')->once();
+        $bot->shouldReceive('sendMessage')
+            ->once()
+            ->with(42, '🗑 Отправь название записи, например: «Подписка»');
+
+        $this->router()->handle($this->callbackQuery(['data' => 'rec_delete']));
+
+        $this->assertSame('rec_delete', $this->app->make(PendingAction::class)->get(42));
     }
 
     /**

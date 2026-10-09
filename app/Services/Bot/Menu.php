@@ -16,6 +16,25 @@ final class Menu
             [['text' => '📊 Отчёт за неделю', 'callback' => 'stats']],
             [['text' => '📜 История', 'callback' => 'history']],
             [['text' => '🗂 Мои категории', 'callback' => 'cats']],
+            [['text' => '🔁 Регулярные', 'callback' => 'recurring']],
+        ];
+    }
+
+    /**
+     * The recurring entries management submenu.
+     *
+     * @return array<int, array<int, array{text: string, callback: string}>>
+     */
+    public static function recurring(): array
+    {
+        return [
+            [
+                ['text' => '➕ Добавить', 'callback' => 'rec_add'],
+                ['text' => '🗑 Удалить', 'callback' => 'rec_delete'],
+            ],
+            [
+                ['text' => '🏠 В меню', 'callback' => 'menu'],
+            ],
         ];
     }
 
